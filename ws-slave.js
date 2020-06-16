@@ -208,7 +208,7 @@ noble.on('discover', function (peripheral) {
     });
   });
 
-  peripheral.on('servicesDiscover', function (services) {
+  peripheral.on('servicesDiscover', function (err, services) {
     var peripheral = this;
     var serviceUuids = [];
 
