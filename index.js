@@ -1,4 +1,16 @@
 var Noble = require('./lib/noble');
-var bindings = require('./lib/resolve-bindings')();
 
-module.exports = new Noble(bindings);
+function isSlaveProcess() {
+
+  return (!!process.argv.find((arg) => {
+    return arg === "out-of-proc";
+  }));
+}
+
+var bindings;
+if(isSlaveProcess()) {
+    bindings = require('./lib/resolve-bindings')();
+    module.exports = new Noble(bindings);
+} else {
+    module.exports = null;
+}
