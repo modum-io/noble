@@ -259,6 +259,13 @@ var onMessage = function (contextId, message) {
   } else if (action === 'disconnect') {
     peripheral.disconnect();
   } else if (action === 'updateRssi') {
+    peripheral.once('rssiUpdate',  (rssi) => {
+      sendEvent(key, {
+        type: 'rssiUpdate',
+        peripheralUuid: peripheral.uuid,
+        rssi: rssi
+      });
+    });
     peripheral.updateRssi();
   } else if (action === 'discoverServices') {
 
@@ -304,16 +311,6 @@ var onMessage = function (contextId, message) {
         });
       };
 
-      var write = function () {
-        var characteristic = this;
-
-        sendEvent(contextId, {
-          type: 'write',
-          peripheralUuid: peripheral.uuid,
-          serviceUuid: service.uuid,
-          characteristicUuid: characteristic.uuid
-        });
-      };
 
       var broadcast = function (state) {
         var characteristic = this;
@@ -389,7 +386,6 @@ var onMessage = function (contextId, message) {
       for (var j = 0; j < characteristics.length; j++) {
         characteristics[j].on('read', read);
 
-        characteristics[j].on('write', write);
 
         characteristics[j].on('broadcast', broadcast);
 
@@ -423,12 +419,24 @@ var onMessage = function (contextId, message) {
     });
     characteristic.read();
   } else if (action === 'write') {
-    peripheral.once('handleWrite', function (handle) {
+
+    let fnHandleWrite;
+    peripheral.once('handleWrite', fnHandleWrite = function (handle) {
       sendEvent(contextId, {
         type: 'handleWrite',
         peripheralUuid: this.uuid,
         handle: handle
       });
+    });
+    characteristic.once('write', () => {
+
+      sendEvent(contextId, {
+        type: 'write',
+        peripheralUuid: peripheral.uuid,
+        serviceUuid: service.uuid,
+        characteristicUuid: characteristic.uuid
+      });
+      peripheral.off('handleWrite', fnHandleWrite);
     });
     characteristic.write(data, withoutResponse);
   } else if (action === 'broadcast') {
@@ -495,13 +503,6 @@ noble.on('discover', function (peripheral) {
       }
 
     
-      peripheral.on('rssiUpdate', function (rssi) {
-        sendEvent(key, {
-          type: 'rssiUpdate',
-          peripheralUuid: this.uuid,
-          rssi: rssi
-        });
-      });
     
     
     

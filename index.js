@@ -1,5 +1,11 @@
 var Noble = require('./lib/noble');
 
+if(process.env.debug) {
+  console.lag = console.log;
+} else {
+  console.lag = () => {};
+}
+
 function isSlaveProcess() {
 
   return (!!process.argv.find((arg) => {

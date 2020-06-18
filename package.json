@@ -1,46 +1,46 @@
 {
-  "author": "Sandeep Mistry",
-  "maintainers": [
-    "Jacob Rosenthal",
-    "Luis Montes"
+  "_args": [
+    [
+      "git+https://github.com/arthare/noble.git#master",
+      "/home/pi/fouri-website-2020/omp-nodejs-app"
+    ]
   ],
-  "license": "MIT",
-  "name": "@abandonware/noble",
-  "description": "A Node.js BLE (Bluetooth Low Energy) central library.",
-  "version": "1.9.2-9",
-  "repository": {
+  "_from": "git+https://github.com/arthare/noble.git#master",
+  "_id": "@abandonware/noble@git+https://github.com/arthare/noble.git#efd7bc976a920a5755ee5ee7fcf12e0056c3e67e",
+  "_inBundle": false,
+  "_integrity": "",
+  "_location": "/@abandonware/noble",
+  "_phantomChildren": {},
+  "_requested": {
     "type": "git",
-    "url": "https://github.com/abandonware/noble.git"
+    "raw": "git+https://github.com/arthare/noble.git#master",
+    "rawSpec": "git+https://github.com/arthare/noble.git#master",
+    "saveSpec": "git+https://github.com/arthare/noble.git#master",
+    "fetchSpec": "https://github.com/arthare/noble.git",
+    "gitCommittish": "master"
+  },
+  "_requiredBy": [
+    "/"
+  ],
+  "_resolved": "git+https://github.com/arthare/noble.git#efd7bc976a920a5755ee5ee7fcf12e0056c3e67e",
+  "_spec": "git+https://github.com/arthare/noble.git#master",
+  "_where": "/home/pi/fouri-website-2020/omp-nodejs-app",
+  "author": {
+    "name": "Sandeep Mistry"
+  },
+  "browser": {
+    "./lib/resolve-bindings.js": "./lib/resolve-bindings-web.js"
   },
   "bugs": {
     "url": "https://github.com/abandonware/noble/issues"
   },
-  "keywords": [
-    "bluetooth",
-    "BLE",
-    "bluetooth low energy",
-    "bluetooth smart",
-    "central"
-  ],
-  "main": "./index.js",
-  "types": "./index.d.ts",
-  "engines": {
-    "node": ">=6"
-  },
-  "os": [
-    "darwin",
-    "linux",
-    "freebsd",
-    "win32"
-  ],
   "dependencies": {
+    "@abandonware/bluetooth-hci-socket": "^0.5.3-5",
     "debug": "^4.1.1",
     "napi-thread-safe-callback": "0.0.6",
     "node-addon-api": "^2.0.0"
   },
-  "optionalDependencies": {
-    "@abandonware/bluetooth-hci-socket": "^0.5.3-5"
-  },
+  "description": "A Node.js BLE (Bluetooth Low Energy) central library.",
   "devDependencies": {
     "async": "^3.2.0",
     "eslint": "^6.8.0",
@@ -58,11 +58,47 @@
     "sinon": "~9.0.0",
     "ws": "^7.2.1"
   },
+  "engines": {
+    "node": ">=6"
+  },
+  "gypfile": true,
+  "homepage": "https://github.com/abandonware/noble#readme",
+  "keywords": [
+    "bluetooth",
+    "BLE",
+    "bluetooth low energy",
+    "bluetooth smart",
+    "central"
+  ],
+  "license": "MIT",
+  "main": "./index.js",
+  "maintainers": [
+    {
+      "name": "Jacob Rosenthal"
+    },
+    {
+      "name": "Luis Montes"
+    }
+  ],
+  "name": "@abandonware/noble",
+  "optionalDependencies": {
+    "@abandonware/bluetooth-hci-socket": "^0.5.3-5"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "freebsd",
+    "win32"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abandonware/noble.git"
+  },
   "scripts": {
+    "install": "node-gyp rebuild",
     "lint": "eslint '**/*.js'",
     "test": "mocha -R spec test/*.js"
   },
-  "browser": {
-    "./lib/resolve-bindings.js": "./lib/resolve-bindings-web.js"
-  }
+  "types": "./index.d.ts",
+  "version": "1.9.2-9"
 }
