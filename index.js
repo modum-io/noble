@@ -8,7 +8,7 @@ function isSlaveProcess() {
 }
 
 var bindings;
-if(isSlaveProcess()) {
+if(isSlaveProcess() || process.argv[1].includes("ws-slave")) {
     bindings = require('./lib/resolve-bindings')();
     module.exports = new Noble(bindings);
 } else {

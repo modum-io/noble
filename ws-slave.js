@@ -7,8 +7,42 @@ var serverMode = !process.argv[2];
 var port = 0xB1e;
 var host = process.argv[2];
 
-var ws;
 var wss;
+
+class NobleClientContext {
+  peripherals = {};
+  ws = null;
+
+  activeScanServiceUuids = [];
+
+  constructor(ws) {
+    this.ws = ws;
+    this.peripherals = {};
+  }
+
+  startScanning(serviceUuids, allowDuplicates) {
+    this.activeScanServiceUuids = serviceUuids;
+  }
+  stopScanning() {
+    this.activeScanServiceUuids = [];
+  }
+  isScanningForPeripheral(peripheral) {
+    if(!peripheral) {
+      // they're just asking if we're scanning at all
+      return this.activeScanServiceUuids.length > 0;
+    }
+    if(peripheral && peripheral.advertisement && peripheral.advertisement.serviceUuids) {
+      return peripheral.advertisement.serviceUuids.find((advertisedUuid) => {
+        const scannedFor = this.activeScanServiceUuids.find((scannedUuid) => scannedUuid === advertisedUuid);
+        return !!scannedFor;
+      })
+    }
+    return false;
+  }
+}
+
+const contexts = {};
+let nextContextId = 0;
 
 if (serverMode) {
   console.log('noble - ws slave - server mode');
@@ -16,20 +50,45 @@ if (serverMode) {
     port: 0xB1e
   });
 
-  wss.on('connection', function (ws_) {
+  wss.on('connection', function (ws) {
     console.log('ws -> connection');
 
-    ws = ws_;
+    const contextId = '' + nextContextId++;
+    ws.contextId = contextId;
+    contexts[contextId] = new NobleClientContext(ws);
 
-    ws.on('message', onMessage);
+    ws.on('message', (evt) => {
+      onMessage(contextId, evt);
+    });
 
     ws.on('close', function () {
-      console.log('ws -> close');
-      noble.stopScanning();
+      console.log(`ws -> close ${contextId}`);
+
+      const ctx = contexts[contextId];
+
+      // go through all the peripherals connected to this websocket connection
+      for(var key in ctx.peripherals) {
+        const p = ctx.peripherals[key];
+
+        // if this peripheral was actively connected to this websocket, treat the bluetooth connection like it died.
+        // and also, make sure the bluetooth connection gets killed
+        if(p.contextId === contextId) {
+          p.disconnect();
+        }
+      }
+      delete contexts[contextId];
+
+      if(!isAnyContextScanning()) {
+        noble.stopScanning();
+      }
+      noble.removeAllListeners('stateChange');
+      ws.removeAllListeners('close');
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('message');
     });
 
     noble.on('stateChange', function (state) {
-      sendEvent({
+      sendEvent(contextId, {
         type: 'stateChange',
         state: state
       });
@@ -37,48 +96,64 @@ if (serverMode) {
 
     // Send poweredOn if already in this state.
     if (noble.state === 'poweredOn') {
-      sendEvent({
+      sendEvent(contextId, {
         type: 'stateChange',
         state: 'poweredOn'
       });
     }
   });
-} else {
-  ws = new WebSocket('ws://' + host + ':' + port);
-
-  ws.on('open', function () {
-    console.log('ws -> open');
-  });
-
-  ws.on('message', function (message) {
-    onMessage(message);
-  });
-
-  ws.on('close', function () {
-    console.log('ws -> close');
-
-    noble.stopScanning();
-  });
 }
 
-var peripherals = {};
 
 // TODO: open/close ws on state change
 
-function sendEvent (event) {
+function sendEvent (contextId, event) {
+  if(!event) {
+    debugger;
+  }
   var message = JSON.stringify(event);
 
-  console.log('ws -> send: ' + message);
-
-  var clients = serverMode ? wss.clients : [ws];
-
-  for (var i = 0; i < clients.length; i++) {
-    clients[i].send(message);
+  if(!event.serviceUuid || (event.serviceUuid !== "1818")) {
+    console.log(`ws -> send ${contextId}: ${message}`);
   }
+
+  const ctx = contexts[contextId];
+  if(!ctx) {
+    // err, guess this guy disconnected?
+    console.log("they wanted to send a message ", message, " to context " + contextId);
+    return;
+  }
+  const ws = contexts[contextId].ws;
+  ws.send(message);
 }
 
-var onMessage = function (message) {
-  console.log('ws -> message: ' + message);
+function isAnyContextScanning() {
+  for(var key in contexts) {
+    const ctx = contexts[key];
+    if(ctx.isScanningForPeripheral()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+class Deferred {
+  resolve;
+  reject;
+  promise;
+  constructor() {
+    this.promise = new Promise((resolve, reject) => {
+      this.resolve = resolve;
+      this.reject = reject;
+    });
+  }
+}
+scanningLockout = new Deferred();
+scanningLockout.resolve();
+
+var connectSerialize = Promise.resolve();
+
+var onMessage = function (contextId, message) {
 
   var command = JSON.parse(message);
 
@@ -94,8 +169,11 @@ var onMessage = function (message) {
   var notify = command.notify;
   var descriptorUuid = command.descriptorUuid;
   var handle;
+  console.log(contextId + ": " + action);
 
-  var peripheral = peripherals[peripheralUuid];
+  const ctx = contexts[contextId];
+
+  var peripheral = ctx.peripherals[peripheralUuid];
   var service = null;
   var characteristic = null;
   var descriptor = null;
@@ -134,101 +212,89 @@ var onMessage = function (message) {
   }
 
   if (action === 'startScanning') {
-    noble.startScanning(serviceUuids, command.allowDuplicates);
+
+    // if no context is scanning right now, start a scan for absolutely everything.
+    // we will narrow things down later and send messages to relevant listeners in the 'discover' handler
+    console.log("a context ", contextId, " wants to start scanning");
+    if(!isAnyContextScanning()) {
+      noble.startScanning(serviceUuids, command.allowDuplicates);
+      console.log("any nobody was scanning before, so now we're scanning!");
+      scanningLockout = new Deferred();
+    }
+    ctx.startScanning(serviceUuids, command.allowDuplicates);
   } else if (action === 'stopScanning') {
-    noble.stopScanning();
+    ctx.stopScanning();
+    console.log("context ", contextId, " wants to stop scanning");
+    if(!isAnyContextScanning()) {
+      console.log("all contexts have stopped scanning");
+      noble.stopScanning();
+      scanningLockout.resolve();
+    }
   } else if (action === 'connect') {
-    peripheral.connect();
+
+    console.log(contextId + ": connect request.  Waiting for scanning lockout");
+    scanningLockout.promise.then(() => {
+      console.log("scanning lockout resolved");
+      peripheral.once('connect', function () {
+        console.log(contextId + "connect callback happened to ws-slave for " + peripheral.uuid + " and context " + contextId);
+        sendEvent(contextId, {
+          type: 'connect',
+          peripheralUuid: this.uuid
+        });
+      });
+      peripheral.once('disconnect', function () {
+        sendEvent(contextId, {
+          type: 'disconnect',
+          peripheralUuid: this.uuid
+        });
+    
+        wipeOldListeners(peripheral, true);
+        peripheral.contextId = null;
+      });
+      peripheral.connect(undefined, contextId);
+  
+      console.log(contextId + "ws-slave connection to " + peripheralUuid + " starting");
+    })
+
   } else if (action === 'disconnect') {
     peripheral.disconnect();
   } else if (action === 'updateRssi') {
     peripheral.updateRssi();
   } else if (action === 'discoverServices') {
+
+
+    peripheral.once('servicesDiscover', function (err, services) {
+      console.log("servicesDiscover callback for " + peripheral.uuid);
+
+      var serviceUuids = services.map((service) => service.uuid);
+
+      sendEvent(contextId, {
+        type: 'servicesDiscover',
+        peripheralUuid: this.uuid,
+        serviceUuids: serviceUuids
+      });
+    });
     peripheral.discoverServices(command.uuids);
   } else if (action === 'discoverIncludedServices') {
-    service.discoverIncludedServices(serviceUuids);
-  } else if (action === 'discoverCharacteristics') {
-    service.discoverCharacteristics(characteristicUuids);
-  } else if (action === 'read') {
-    characteristic.read();
-  } else if (action === 'write') {
-    characteristic.write(data, withoutResponse);
-  } else if (action === 'broadcast') {
-    characteristic.broadcast(broadcast);
-  } else if (action === 'notify') {
-    characteristic.notify(notify);
-  } else if (action === 'discoverDescriptors') {
-    characteristic.discoverDescriptors();
-  } else if (action === 'readValue') {
-    descriptor.readValue();
-  } else if (action === 'writeValue') {
-    descriptor.writeValue(data);
-  } else if (action === 'readHandle') {
-    peripheral.readHandle(handle);
-  } else if (action === 'writeHandle') {
-    peripheral.writeHandle(handle, data, withoutResponse);
-  }
-};
-
-noble.on('discover', function (peripheral) {
-  peripherals[peripheral.uuid] = peripheral;
-
-  peripheral.on('connect', function () {
-    sendEvent({
-      type: 'connect',
-      peripheralUuid: this.uuid
-    });
-  });
-
-  peripheral.on('disconnect', function () {
-    sendEvent({
-      type: 'disconnect',
-      peripheralUuid: this.uuid
-    });
-
-    for (var i in this.services) {
-      for (var j in this.services[i].characteristics) {
-        for (var k in this.services[i].characteristics[j].descriptors) {
-          this.services[i].characteristics[j].descriptors[k].removeAllListeners();
-        }
-
-        this.services[i].characteristics[j].removeAllListeners();
-      }
-      this.services[i].removeAllListeners();
-    }
-
-    this.removeAllListeners();
-  });
-
-  peripheral.on('rssiUpdate', function (rssi) {
-    sendEvent({
-      type: 'rssiUpdate',
-      peripheralUuid: this.uuid,
-      rssi: rssi
-    });
-  });
-
-  peripheral.on('servicesDiscover', function (err, services) {
-    var peripheral = this;
-    var serviceUuids = [];
-
-    var includedServicesDiscover = function (includedServiceUuids) {
-      sendEvent({
+    service.once('includedServicesDiscover', (includedServiceUuids) => {
+      sendEvent(contextId, {
         type: 'includedServicesDiscover',
         peripheralUuid: peripheral.uuid,
         serviceUuid: this.uuid,
         includedServiceUuids: includedServiceUuids
       });
-    };
+    });
 
-    var characteristicsDiscover = function (characteristics) {
-      var service = this;
+    service.discoverIncludedServices(serviceUuids);
+  } else if (action === 'discoverCharacteristics') {
+    service.once('characteristicsDiscover', (characteristics) => {
+
       var discoveredCharacteristics = [];
 
       var read = function (data, isNotification) {
         var characteristic = this;
 
-        sendEvent({
+        sendEvent(contextId, {
           type: 'read',
           peripheralUuid: peripheral.uuid,
           serviceUuid: service.uuid,
@@ -241,7 +307,7 @@ noble.on('discover', function (peripheral) {
       var write = function () {
         var characteristic = this;
 
-        sendEvent({
+        sendEvent(contextId, {
           type: 'write',
           peripheralUuid: peripheral.uuid,
           serviceUuid: service.uuid,
@@ -252,7 +318,7 @@ noble.on('discover', function (peripheral) {
       var broadcast = function (state) {
         var characteristic = this;
 
-        sendEvent({
+        sendEvent(contextId, {
           type: 'broadcast',
           peripheralUuid: peripheral.uuid,
           serviceUuid: service.uuid,
@@ -264,7 +330,7 @@ noble.on('discover', function (peripheral) {
       var notify = function (state) {
         var characteristic = this;
 
-        sendEvent({
+        sendEvent(contextId, {
           type: 'notify',
           peripheralUuid: peripheral.uuid,
           serviceUuid: service.uuid,
@@ -281,7 +347,7 @@ noble.on('discover', function (peripheral) {
         var valueRead = function (data) {
           var descriptor = this;
 
-          sendEvent({
+          sendEvent(contextId, {
             type: 'valueRead',
             peripheralUuid: peripheral.uuid,
             serviceUuid: service.uuid,
@@ -294,7 +360,7 @@ noble.on('discover', function (peripheral) {
         var valueWrite = function (data) {
           var descriptor = this;
 
-          sendEvent({
+          sendEvent(contextId, {
             type: 'valueWrite',
             peripheralUuid: peripheral.uuid,
             serviceUuid: service.uuid,
@@ -311,7 +377,7 @@ noble.on('discover', function (peripheral) {
           discoveredDescriptors.push(descriptors[k].uuid);
         }
 
-        sendEvent({
+        sendEvent(contextId, {
           type: 'descriptorsDiscover',
           peripheralUuid: peripheral.uuid,
           serviceUuid: service.uuid,
@@ -337,68 +403,126 @@ noble.on('discover', function (peripheral) {
         });
       }
 
-      sendEvent({
+      sendEvent(contextId, {
         type: 'characteristicsDiscover',
         peripheralUuid: peripheral.uuid,
-        serviceUuid: this.uuid,
+        serviceUuid: service.uuid,
         characteristics: discoveredCharacteristics
       });
-    };
+    })
+    service.discoverCharacteristics(characteristicUuids);
+  } else if (action === 'read') {
 
-    for (var i in services) {
-      services[i].on('includedServicesDiscover', includedServicesDiscover);
+    peripheral.once('handleRead', function (handle, data) {
+      sendEvent(contextId, {
+        type: 'handleRead',
+        peripheralUuid: this.uuid,
+        handle: handle,
+        data: data.toString('hex')
+      });
+    });
+    characteristic.read();
+  } else if (action === 'write') {
+    peripheral.once('handleWrite', function (handle) {
+      sendEvent(contextId, {
+        type: 'handleWrite',
+        peripheralUuid: this.uuid,
+        handle: handle
+      });
+    });
+    characteristic.write(data, withoutResponse);
+  } else if (action === 'broadcast') {
+    characteristic.broadcast(broadcast);
+  } else if (action === 'notify') {
 
-      services[i].on('characteristicsDiscover', characteristicsDiscover);
+    peripheral.once('handleNotify', function (handle, data) {
+      sendEvent(contextId, {
+        type: 'handleNotify',
+        peripheralUuid: this.uuid,
+        handle: handle,
+        data: data.toString('hex')
+      });
+    });
+    characteristic.notify(notify);
+  } else if (action === 'discoverDescriptors') {
+    characteristic.discoverDescriptors();
+  } else if (action === 'readValue') {
+    descriptor.readValue();
+  } else if (action === 'writeValue') {
+    descriptor.writeValue(data);
+  } else if (action === 'readHandle') {
+    peripheral.readHandle(handle);
+  } else if (action === 'writeHandle') {
+    peripheral.writeHandle(handle, data, withoutResponse);
+  }
+};
 
-      serviceUuids.push(services[i].uuid);
+function wipeOldListeners(peripheral, andThisToo) {
+  console.log("wiping listeners from " + peripheral.uuid + " / " + peripheral.contextId + " / " + andThisToo);
+  for (var i in peripheral.services) {
+    for (var j in peripheral.services[i].characteristics) {
+      for (var k in peripheral.services[i].characteristics[j].descriptors) {
+        peripheral.services[i].characteristics[j].descriptors[k].removeAllListeners();
+      }
+
+      peripheral.services[i].characteristics[j].removeAllListeners();
     }
+    peripheral.services[i].removeAllListeners();
+  }
 
-    sendEvent({
-      type: 'servicesDiscover',
-      peripheralUuid: this.uuid,
-      serviceUuids: serviceUuids
-    });
-  });
+  if(andThisToo) {
+    peripheral.removeAllListeners();
+  }
+  console.log("wiped listeners from " + peripheral.uuid + " / " + andThisToo);
+}
 
-  peripheral.on('handleRead', function (handle, data) {
-    sendEvent({
-      type: 'handleRead',
-      peripheralUuid: this.uuid,
-      handle: handle,
-      data: data.toString('hex')
-    });
-  });
+noble.on('discover', function (peripheral) {
 
-  peripheral.on('handleWrite', function (handle) {
-    sendEvent({
-      type: 'handleWrite',
-      peripheralUuid: this.uuid,
-      handle: handle
-    });
-  });
+  for(var key in contexts) {
+    const ctx = contexts[key];
 
-  peripheral.on('handleNotify', function (handle, data) {
-    sendEvent({
-      type: 'handleNotify',
-      peripheralUuid: this.uuid,
-      handle: handle,
-      data: data.toString('hex')
-    });
-  });
+    if(ctx.isScanningForPeripheral(peripheral)) {
 
-  sendEvent({
-    type: 'discover',
-    peripheralUuid: peripheral.uuid,
-    address: peripheral.address,
-    addressType: peripheral.addressType,
-    connectable: peripheral.connectable,
-    advertisement: {
-      localName: peripheral.advertisement.localName,
-      txPowerLevel: peripheral.advertisement.txPowerLevel,
-      serviceUuids: peripheral.advertisement.serviceUuids,
-      manufacturerData: (peripheral.advertisement.manufacturerData ? peripheral.advertisement.manufacturerData.toString('hex') : null),
-      serviceData: (peripheral.advertisement.serviceData ? peripheral.advertisement.serviceData.toString('hex') : null)
-    },
-    rssi: peripheral.rssi
-  });
+      const oldPeripheral = ctx.peripherals[peripheral.uuid];
+      if(oldPeripheral) {
+        for(var key in peripheral) {
+          if(peripheral[key] !== oldPeripheral[key]) {
+            console.log(key, " changed to ", peripheral[key]);
+          }
+        }
+      } else {
+        ctx.peripherals[peripheral.uuid] = peripheral;
+      }
+
+    
+      peripheral.on('rssiUpdate', function (rssi) {
+        sendEvent(key, {
+          type: 'rssiUpdate',
+          peripheralUuid: this.uuid,
+          rssi: rssi
+        });
+      });
+    
+    
+    
+    
+    
+      sendEvent(key, {
+        type: 'discover',
+        peripheralUuid: peripheral.uuid,
+        address: peripheral.address,
+        addressType: peripheral.addressType,
+        connectable: peripheral.connectable,
+        advertisement: {
+          localName: peripheral.advertisement.localName,
+          txPowerLevel: peripheral.advertisement.txPowerLevel,
+          serviceUuids: peripheral.advertisement.serviceUuids,
+          manufacturerData: (peripheral.advertisement.manufacturerData ? peripheral.advertisement.manufacturerData.toString('hex') : null),
+          serviceData: (peripheral.advertisement.serviceData ? peripheral.advertisement.serviceData.toString('hex') : null)
+        },
+        rssi: peripheral.rssi
+      });
+
+    }
+  }
 });
