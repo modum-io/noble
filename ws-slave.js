@@ -6,35 +6,61 @@ var noble = require('./index');
 var serverMode = !process.argv[2];
 var defaultScanUuid = process.argv[3];
 var g_fEnableRealScanning = true;
-var port = 0xB1e;
-var host = process.argv[2];
 
 var wss;
+function assert(f, reason) {
+  if(!f) {
+    console.log(reason);
+    debugger;
+  }
+}
 
 class NobleClientContext {
   peripherals = {};
   ws = null;
+  fConnected = false;
+  id = -1;
 
   activeScanServiceUuids = [];
 
-  constructor(ws) {
+  constructor(ws, id) {
     this.ws = ws;
     this.peripherals = {};
+    this.fConnected = false;
+    this.allowDuplicates = false;
+    this.id = id;
+    this.uuidConnected = null;
   }
 
   startScanning(serviceUuids, allowDuplicates) {
+    this.allowDuplicates = allowDuplicates;
     this.activeScanServiceUuids = serviceUuids;
+    assert(serviceUuids.length > 0, "you gotta actually want to be scanning, right?");
   }
   stopScanning() {
     this.activeScanServiceUuids = [];
   }
-  isScanningForPeripheral(peripheral) {
-    if(!peripheral) {
+  isConnected() {
+    return this.fConnected;
+  }
+  getConnectedUuid() {
+    return this.uuidConnected;
+  }
+  setConnected(isConnectedNow, uuidToWho) {
+    this.fConnected = isConnectedNow;
+    if(isConnectedNow) {
+      this.uuidConnected = uuidToWho;
+    } else {
+      this.uuidConnected = null;
+    }
+  }
+  isScanningForPeripheral(initialAdvertisement) {
+    if(!initialAdvertisement) {
       // they're just asking if we're scanning at all
       return this.activeScanServiceUuids.length > 0;
     }
-    if(peripheral && peripheral.advertisement && peripheral.advertisement.serviceUuids) {
-      return peripheral.advertisement.serviceUuids.find((advertisedUuid) => {
+    if(initialAdvertisement && initialAdvertisement.serviceUuids) {
+      return initialAdvertisement.serviceUuids.find((advertisedUuid) => {
         const scannedFor = this.activeScanServiceUuids.find((scannedUuid) => scannedUuid === advertisedUuid);
         return !!scannedFor;
       })
@@ -46,19 +72,106 @@ class NobleClientContext {
 const contexts = {};
 let nextContextId = 0;
 
+
+var g_currentScanUuids = [];
+var g_fStoppedScanning = true;
+
+if(defaultScanUuid) {
+  g_currentScanUuids = [defaultScanUuid];
+}
+
+const CommandedScanState_Unknown = -1;
+const CommandedScanState_StopScan = 0;
+const CommandedScanState_StartScan = 1;
+
+let currentCommandedState = CommandedScanState_Unknown;
+function stopScanning() {
+  if(currentCommandedState !== CommandedScanState_StopScan) {
+    currentCommandedState = CommandedScanState_StopScan;
+    noble.stopScanning();
+  }
+}
+function startScanning(uuidsToHit, allowDuplicates) {
+  if(currentCommandedState !== CommandedScanState_StartScan) {
+    currentCommandedState = CommandedScanState_StartScan;
+    noble.startScanning(uuidsToHit, allowDuplicates);
+  }
+}
+
+function notifyScanRelevantEvent() {
+
+  if(!isAnyContextConnected()) {
+
+    let scanServiceUuids = {};
+    for(var key in contexts) {
+      if(key === 'eventNames') {debugger;}
+      const ctx = contexts[key];
+      if(ctx.isScanningForPeripheral()) {
+        ctx.activeScanServiceUuids.forEach((uuid) => scanServiceUuids[uuid] = true);
+      }
+    }
+    g_currentScanUuids.forEach((uuid) => scanServiceUuids[uuid] = true);
+
+    const uuidsToHit = Object.keys(scanServiceUuids);
+
+    uuidsToHit.sort();
+    stopScanning();
+
+    if(g_fEnableRealScanning) {
+      try {
+        startScanning(uuidsToHit, true);
+      } catch(e) {
+        
+      }
+      
+    }
+    g_currentScanUuids = uuidsToHit;
+  } else {
+    // some context is connected, so we gotta stop scanning
+    stopScanning();
+  }
+}
+
 if (serverMode) {
   console.log('noble - ws slave - server mode');
   wss = new WebSocket.Server({
     port: 0xB1e
   });
 
+
+  const controlPort = 0xb1f;
+  const myControlSocket = new WebSocket(`ws://localhost:${controlPort}`);
+  myControlSocket.on('message', (msg) => {
+    switch(msg) {
+      case 'enable-real-scanning':
+        g_fEnableRealScanning = true;
+        notifyScanRelevantEvent();
+        break;
+      case 'disable-real-scanning':
+        g_fEnableRealScanning = false;
+        notifyScanRelevantEvent();
+        break;
+    }
+  })
+  myControlSocket.on('close', () => {
+    // if our host closes, so do we.
+    process.exit(0);
+  });
+  myControlSocket.on('error', () => {
+    // if we can't connect to our host, we close
+    process.exit(0);
+  })
+
+  notifyScanRelevantEvent();
+
   wss.on('connection', function (ws) {
     console.log('ws -> connection');
 
     const contextId = '' + nextContextId++;
     ws.contextId = contextId;
-    contexts[contextId] = new NobleClientContext(ws);
+    contexts[contextId] = new NobleClientContext(ws, contextId);
 
+    if(contextId === 'eventNames') {debugger;}
     ws.on('message', (evt) => {
       onMessage(contextId, evt);
     });
@@ -76,17 +189,23 @@ if (serverMode) {
         // and also, make sure the bluetooth connection gets killed
         if(p.contextId === contextId) {
           p.disconnect();
+          ctx.setConnected(false, null);
         }
       }
       delete contexts[contextId];
 
-      if(!isAnyContextScanning()) {
-        noble.stopScanning();
+      let contextsLeft = 0;
+      for(var key in contexts) {
+        contextsLeft++;
       }
+      console.log("There are ", contextsLeft, "contexts left");
+
+
       noble.removeAllListeners('stateChange');
       ws.removeAllListeners('close');
       ws.removeAllListeners('open');
       ws.removeAllListeners('message');
+      notifyScanRelevantEvent();
     });
 
     noble.on('stateChange', function (state) {
@@ -116,13 +235,13 @@ function sendEvent (contextId, event) {
   var message = JSON.stringify(event);
 
   if(!event.serviceUuid || (event.serviceUuid !== "1818")) {
-    console.log(`ws -> send ${contextId}: ${message}`);
+    //console.log(`ws -> send ${contextId}: ${message}`);
   }
 
   const ctx = contexts[contextId];
   if(!ctx) {
     // err, guess this guy disconnected?
-    console.log("they wanted to send a message ", message, " to context " + contextId);
+    //console.log("they wanted to send a message ", message, " to context " + contextId);
     return;
   }
   const ws = contexts[contextId].ws;
@@ -132,7 +251,28 @@ function sendEvent (contextId, event) {
 function isAnyContextScanning() {
   for(var key in contexts) {
     const ctx = contexts[key];
+    if(key === 'eventNames') {debugger;}
     if(ctx.isScanningForPeripheral()) {
+      return true;
+    }
+  }
+  return false;
+}
+function isAnyContextConnectedTo(uuid) {
+  for(var key in contexts) {
+    const ctx = contexts[key];
+    if(key === 'eventNames') {debugger;}
+    if(ctx.isConnected() && ctx.getConnectedUuid() === uuid) {
+      return true;
+    }
+  }
+  return false;
+}
+function isAnyContextConnected() {
+  for(var key in contexts) {
+
+    const ctx = contexts[key];
+    if(ctx.isConnected()) {
       return true;
     }
   }
@@ -150,10 +290,110 @@ class Deferred {
     });
   }
 }
-scanningLockout = new Deferred();
-scanningLockout.resolve();
 
 var connectSerialize = Promise.resolve();
+
+
+class NoticedPeripheral {
+  peripheral;
+  advertisement;
+  tmNow;
+
+  constructor(peripheral, tmNow) {
+    this.peripheral = peripheral;
+    this.advertisement = JSON.parse(JSON.stringify(peripheral.advertisement));
+
+    assert(this.advertisement.serviceUuids.length > 0, "we can't have a noticed periph with no service uuids");
+
+    this.tmNow = tmNow;
+  }
+};
+
+const mapNoticedPeripherals = {};
+
+function handleDiscoveredPeripheral(peripheral, initialAdvertisement) {
+
+  assert(peripheral.once); // this needs to be a real peripheral, not some fake one
+
+  for(var key in contexts) {
+    const ctx = contexts[key];
+
+    if(!ctx.isScanningForPeripheral()) {
+      // if you're simply not scanning, that's totally fine
+      continue;
+    }
+
+    if(ctx.isScanningForPeripheral(initialAdvertisement)) {
+      const oldPeripheral = ctx.peripherals[peripheral.uuid];
+      if(oldPeripheral) {
+        // we already knew about this guy, no updates needed
+      } else {
+        ctx.peripherals[peripheral.uuid] = peripheral;
+      }
+
+      //console.log("context ", ctx.id, " is scanning for ", peripheral.advertisement.localName);
+
+      const uuidsTouse = initialAdvertisement && initialAdvertisement.serviceUuids || peripheral.advertisement && peripheral.advertisement.serviceUuids;
+      const sendObj = {
+        type: 'discover',
+        peripheralUuid: peripheral.uuid,
+        address: peripheral.address,
+        addressType: peripheral.addressType,
+        connectable: peripheral.connectable,
+        advertisement: {
+          localName: peripheral.advertisement.localName,
+          txPowerLevel: peripheral.advertisement.txPowerLevel,
+          serviceUuids: uuidsTouse,
+          manufacturerData: (peripheral.advertisement.manufacturerData ? peripheral.advertisement.manufacturerData.toString('hex') : null),
+          serviceData: (peripheral.advertisement.serviceData ? peripheral.advertisement.serviceData.toString('hex') : null)
+        },
+        rssi: peripheral.rssi
+      }
+      sendEvent(key, sendObj);
+
+    } else {
+      //console.log("context ", ctx.id, " is NOT scanning for ", peripheral.advertisement.localName, " which has ", peripheral.advertisement.serviceUuids, " b/c ctx wants ", ctx.activeScanServiceUuids);
+    }
+  }
+}
+function dumpNoticedPeripherals(andContinueSequence) {
+
+  try {
+    if(isAnyContextScanning()) {
+      for(var key in mapNoticedPeripherals) {
+        const noticedPeriph = mapNoticedPeripherals[key];
+  
+        if(isAnyContextConnectedTo(noticedPeriph.peripheral.uuid)) {
+          // someone is already connected to this guy, so don't tell anyone else about it.
+          continue;
+        }
+  
+        //const uuids = noticedPeriph.advertisement && noticedPeriph.advertisement.serviceUuids;
+        //console.log("faking like we just discovered ", noticedPeriph.advertisement.localName, " with ", uuids && uuids.length, " services");
+  
+        handleDiscoveredPeripheral(noticedPeriph.peripheral, noticedPeriph.advertisement);
+      }
+    }
+  } catch(e) {
+    debugger;
+  }
+
+  if(andContinueSequence) {
+    setTimeout(() => {
+      dumpNoticedPeripherals(andContinueSequence);
+    }, 750);
+  }
+}
+dumpNoticedPeripherals(true);
+
+function handleScanningRequestFromContext(ctx, serviceUuids, allowDuplicates) {
+
+  // nobody is currently connected, so we can start scanning.
+  ctx.startScanning(serviceUuids, allowDuplicates);
+  dumpNoticedPeripherals(false);
+  notifyScanRelevantEvent();
+}
+
 
 var onMessage = function (contextId, message) {
 
@@ -171,7 +411,11 @@ var onMessage = function (contextId, message) {
   var notify = command.notify;
   var descriptorUuid = command.descriptorUuid;
   var handle;
-  console.log(contextId + ": " + action);
+
+  if(action !== 'write') {
+    console.log(contextId + ": " + action);
+  }
+
 
   const ctx = contexts[contextId];
 
@@ -217,48 +461,56 @@ var onMessage = function (contextId, message) {
 
     // if no context is scanning right now, start a scan for absolutely everything.
     // we will narrow things down later and send messages to relevant listeners in the 'discover' handler
-    console.log("a context ", contextId, " wants to start scanning");
-    if(!isAnyContextScanning()) {
-      noble.startScanning(serviceUuids, command.allowDuplicates);
-      console.log("any nobody was scanning before, so now we're scanning!");
-      scanningLockout = new Deferred();
-    }
-    ctx.startScanning(serviceUuids, command.allowDuplicates);
+
+    handleScanningRequestFromContext(ctx, serviceUuids, command.allowDuplicates);
+
+
   } else if (action === 'stopScanning') {
     ctx.stopScanning();
-    console.log("context ", contextId, " wants to stop scanning");
-    if(!isAnyContextScanning()) {
-      console.log("all contexts have stopped scanning");
-      noble.stopScanning();
-      scanningLockout.resolve();
-    }
+    notifyScanRelevantEvent();
   } else if (action === 'connect') {
 
-    console.log(contextId + ": connect request.  Waiting for scanning lockout");
-    scanningLockout.promise.then(() => {
-      console.log("scanning lockout resolved");
-      peripheral.once('connect', function () {
-        console.log(contextId + "connect callback happened to ws-slave for " + peripheral.uuid + " and context " + contextId);
-        sendEvent(contextId, {
-          type: 'connect',
-          peripheralUuid: this.uuid
-        });
+    peripheral.once('connect', function () {
+      ctx.setConnected(true, this.uuid);
+      //console.log(contextId + "connect callback happened to ws-slave for " + peripheral.advertisement.localName + " and context " + contextId);
+      sendEvent(contextId, {
+        type: 'connect',
+        peripheralUuid: this.uuid
       });
-      peripheral.once('disconnect', function () {
-        sendEvent(contextId, {
-          type: 'disconnect',
-          peripheralUuid: this.uuid
-        });
-    
-        wipeOldListeners(peripheral, true);
-        peripheral.contextId = null;
+
+      notifyScanRelevantEvent();
+    });
+    peripheral.once('disconnect', function () {
+      //console.log("got disconnect event from peripheral ", peripheral.pCounter, peripheral.advertisement.localName);
+      ctx.setConnected(false, null);
+      sendEvent(contextId, {
+        type: 'disconnect',
+        peripheralUuid: this.uuid
       });
-      peripheral.connect(undefined, contextId);
   
-      console.log(contextId + "ws-slave connection to " + peripheralUuid + " starting");
-    })
+      wipeOldListeners(peripheral, true);
+      peripheral.contextId = null;
+
+      notifyScanRelevantEvent();
+    });
+
+    if(ctx.isConnected() && ctx.getConnectedUuid() === peripheralUuid) {
+      // uhh... you were already connected...
+      const name = peripheral.advertisement.localName;
+      //console.log(contextId + " hey dingus, you were already connected to " + name + ", but we're going to allow this");
+      sendEvent(contextId, {
+        type: 'connect',
+        peripheralUuid: this.uuid
+      });
+    } else {
+      //console.log(contextId + "ws-slave connection to " + peripheral.advertisement.localName + " starting");
+      peripheral.connect(undefined, contextId);
+    }
+
+    
 
   } else if (action === 'disconnect') {
+    //console.log(contextId + " telling " + peripheral.pCounter + " / " + peripheral.advertisement.localName + " to disconnect");
     peripheral.disconnect();
   } else if (action === 'updateRssi') {
     peripheral.once('rssiUpdate',  (rssi) => {
@@ -273,7 +525,7 @@ var onMessage = function (contextId, message) {
 
 
     peripheral.once('servicesDiscover', function (err, services) {
-      console.log("servicesDiscover callback for " + peripheral.uuid);
+      //console.log("servicesDiscover callback for " + peripheral.uuid);
 
       var serviceUuids = services.map((service) => service.uuid);
 
@@ -468,7 +720,7 @@ var onMessage = function (contextId, message) {
 };
 
 function wipeOldListeners(peripheral, andThisToo) {
-  console.log("wiping listeners from " + peripheral.uuid + " / " + peripheral.contextId + " / " + andThisToo);
+  //console.log("wiping listeners from " + peripheral.uuid + " / " + peripheral.contextId + " / " + andThisToo);
   for (var i in peripheral.services) {
     for (var j in peripheral.services[i].characteristics) {
       for (var k in peripheral.services[i].characteristics[j].descriptors) {
@@ -483,49 +735,21 @@ function wipeOldListeners(peripheral, andThisToo) {
   if(andThisToo) {
     peripheral.removeAllListeners();
   }
-  console.log("wiped listeners from " + peripheral.uuid + " / " + andThisToo);
+  //console.log("wiped listeners from " + peripheral.uuid + " / " + andThisToo);
 }
+
 
 noble.on('discover', function (peripheral) {
 
-  for(var key in contexts) {
-    const ctx = contexts[key];
-
-    if(ctx.isScanningForPeripheral(peripheral)) {
-
-      const oldPeripheral = ctx.peripherals[peripheral.uuid];
-      if(oldPeripheral) {
-        for(var key in peripheral) {
-          if(peripheral[key] !== oldPeripheral[key]) {
-            console.log(key, " changed to ", peripheral[key]);
-          }
-        }
-      } else {
-        ctx.peripherals[peripheral.uuid] = peripheral;
-      }
-
-    
-    
-    
-    
-    
-    
-      sendEvent(key, {
-        type: 'discover',
-        peripheralUuid: peripheral.uuid,
-        address: peripheral.address,
-        addressType: peripheral.addressType,
-        connectable: peripheral.connectable,
-        advertisement: {
-          localName: peripheral.advertisement.localName,
-          txPowerLevel: peripheral.advertisement.txPowerLevel,
-          serviceUuids: peripheral.advertisement.serviceUuids,
-          manufacturerData: (peripheral.advertisement.manufacturerData ? peripheral.advertisement.manufacturerData.toString('hex') : null),
-          serviceData: (peripheral.advertisement.serviceData ? peripheral.advertisement.serviceData.toString('hex') : null)
-        },
-        rssi: peripheral.rssi
-      });
-
-    }
+  //console.log("noticed ", peripheral.uuid, " with ", peripheral.advertisement.serviceUuids.length, " services");
+  assert(peripheral.advertisement.serviceUuids.length > 0, "gotta have services!");
+  if(mapNoticedPeripherals[peripheral.uuid]) {
+    const oldPeriph = mapNoticedPeripherals[peripheral.uuid];
+    oldPeriph.tmNow = new Date().getTime();
+  } else {
+    mapNoticedPeripherals[peripheral.uuid] = new NoticedPeripheral(peripheral, new Date().getTime());
   }
+
+  handleDiscoveredPeripheral(peripheral);
 });
+
