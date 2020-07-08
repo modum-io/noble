@@ -4,6 +4,8 @@ var WebSocket = require('ws');
 var noble = require('./index');
 
 var serverMode = !process.argv[2];
+var defaultScanUuid = process.argv[3];
+var g_fEnableRealScanning = true;
 var port = 0xB1e;
 var host = process.argv[2];
 
