@@ -3,8 +3,7 @@ var WebSocket = require('ws');
 
 var noble = require('./index');
 
-var serverMode = !process.argv[2];
-var defaultScanUuid = process.argv[3];
+var defaultScanUuid = process.argv[3] || "1818";
 var g_fEnableRealScanning = true;
 
 var wss;
@@ -141,98 +140,96 @@ function notifyScanRelevantEvent() {
   }
 }
 
-if (serverMode) {
-  console.log('noble - ws slave - server mode');
-  wss = new WebSocket.Server({
-    port: 0xB1e
-  });
+console.log('noble - ws slave - server mode');
+wss = new WebSocket.Server({
+  port: 0xB1e
+});
 
 
-  const controlPort = 0xb1f;
-  const myControlSocket = new WebSocket(`ws://localhost:${controlPort}`);
-  myControlSocket.on('message', (msg) => {
-    switch(msg) {
-      case 'enable-real-scanning':
-        g_fEnableRealScanning = true;
-        notifyScanRelevantEvent();
-        break;
-      case 'disable-real-scanning':
-        g_fEnableRealScanning = false;
-        notifyScanRelevantEvent();
-        break;
-    }
-  })
-  myControlSocket.on('close', () => {
-    // if our host closes, so do we.
-    process.exit(0);
-  });
-  myControlSocket.on('error', () => {
-    // if we can't connect to our host, we close
-    process.exit(0);
-  })
-
-  notifyScanRelevantEvent();
-
-  wss.on('connection', function (ws) {
-    console.log('ws -> connection');
-
-    const contextId = '' + nextContextId++;
-    ws.contextId = contextId;
-    contexts[contextId] = new NobleClientContext(ws, contextId);
-
-    if(contextId === 'eventNames') {debugger;}
-    ws.on('message', (evt) => {
-      onMessage(contextId, evt);
-    });
-
-    ws.on('close', function () {
-      console.log(`ws -> close ${contextId}`);
-
-      const ctx = contexts[contextId];
-
-      // go through all the peripherals connected to this websocket connection
-      for(var key in ctx.peripherals) {
-        const p = ctx.peripherals[key];
-
-        // if this peripheral was actively connected to this websocket, treat the bluetooth connection like it died.
-        // and also, make sure the bluetooth connection gets killed
-        if(p.contextId === contextId) {
-          p.disconnect();
-          ctx.setConnected(ConnectionState_Disconnected, null);
-        }
-      }
-      delete contexts[contextId];
-
-      let contextsLeft = 0;
-      for(var key in contexts) {
-        contextsLeft++;
-      }
-      console.log("There are ", contextsLeft, "contexts left");
-
-
-      noble.removeAllListeners('stateChange');
-      ws.removeAllListeners('close');
-      ws.removeAllListeners('open');
-      ws.removeAllListeners('message');
+const controlPort = 0xb1f;
+const myControlSocket = new WebSocket(`ws://localhost:${controlPort}`);
+myControlSocket.on('message', (msg) => {
+  switch(msg) {
+    case 'enable-real-scanning':
+      g_fEnableRealScanning = true;
       notifyScanRelevantEvent();
-    });
+      break;
+    case 'disable-real-scanning':
+      g_fEnableRealScanning = false;
+      notifyScanRelevantEvent();
+      break;
+  }
+})
+myControlSocket.on('close', () => {
+  // if our host closes, so do we.
+  process.exit(0);
+});
+myControlSocket.on('error', () => {
+  // if we can't connect to our host, we close
+  process.exit(0);
+})
 
-    noble.on('stateChange', function (state) {
-      sendEvent(contextId, {
-        type: 'stateChange',
-        state: state
-      });
-    });
+notifyScanRelevantEvent();
 
-    // Send poweredOn if already in this state.
-    if (noble.state === 'poweredOn') {
-      sendEvent(contextId, {
-        type: 'stateChange',
-        state: 'poweredOn'
-      });
-    }
+wss.on('connection', function (ws) {
+  console.log('ws -> connection');
+
+  const contextId = '' + nextContextId++;
+  ws.contextId = contextId;
+  contexts[contextId] = new NobleClientContext(ws, contextId);
+
+  if(contextId === 'eventNames') {debugger;}
+  ws.on('message', (evt) => {
+    onMessage(contextId, evt);
   });
-}
+
+  ws.on('close', function () {
+    console.log(`ws -> close ${contextId}`);
+
+    const ctx = contexts[contextId];
+
+    // go through all the peripherals connected to this websocket connection
+    for(var key in ctx.peripherals) {
+      const p = ctx.peripherals[key];
+
+      // if this peripheral was actively connected to this websocket, treat the bluetooth connection like it died.
+      // and also, make sure the bluetooth connection gets killed
+      if(p.contextId === contextId) {
+        p.disconnect();
+        ctx.setConnected(ConnectionState_Disconnected, null);
+      }
+    }
+    delete contexts[contextId];
+
+    let contextsLeft = 0;
+    for(var key in contexts) {
+      contextsLeft++;
+    }
+    console.log("There are ", contextsLeft, "contexts left");
+
+
+    noble.removeAllListeners('stateChange');
+    ws.removeAllListeners('close');
+    ws.removeAllListeners('open');
+    ws.removeAllListeners('message');
+    notifyScanRelevantEvent();
+  });
+
+  noble.on('stateChange', function (state) {
+    sendEvent(contextId, {
+      type: 'stateChange',
+      state: state
+    });
+  });
+
+  // Send poweredOn if already in this state.
+  if (noble.state === 'poweredOn') {
+    sendEvent(contextId, {
+      type: 'stateChange',
+      state: 'poweredOn'
+    });
+  }
+});
 
 
 // TODO: open/close ws on state change
