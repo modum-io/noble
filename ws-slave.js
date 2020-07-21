@@ -374,6 +374,7 @@ function handleDiscoveredPeripheral(peripheral, initialAdvertisement) {
       if(oldPeripheral) {
         // we already knew about this guy, no updates needed
       } else {
+        assert(peripheral._noble, "peripheral has to have noble!");
         ctx.peripherals[peripheral.uuid] = peripheral;
       }
 
@@ -439,7 +440,6 @@ function loadSavedPeripherals() {
 }
 function dumpNoticedPeripherals(andContinueSequence) {
 
-  loadSavedPeripherals();
   try {
     if(isAnyContextScanning()) {
       for(var key in mapNoticedPeripherals) {
@@ -453,6 +453,7 @@ function dumpNoticedPeripherals(andContinueSequence) {
         //const uuids = noticedPeriph.advertisement && noticedPeriph.advertisement.serviceUuids;
         //console.log("faking like we just discovered ", noticedPeriph.advertisement.localName, " with ", uuids && uuids.length, " services");
   
+        assert(noticedPeriph.peripheral._noble, "peripheral needs noble!");
         handleDiscoveredPeripheral(noticedPeriph.peripheral, noticedPeriph.advertisement);
       }
     }
@@ -502,6 +503,8 @@ var onMessage = function (contextId, message) {
   const ctx = contexts[contextId];
 
   var peripheral = ctx.peripherals[peripheralUuid];
+  assert(!peripheral || peripheral._noble, "we need noble!");
+
   var service = null;
   var characteristic = null;
   var descriptor = null;
@@ -846,7 +849,7 @@ function wipeOldListeners(peripheral, andThisToo) {
 
 noble.on('discover', function (peripheral) {
 
-  console.log("noticed ", peripheral.uuid, " with ", peripheral.advertisement.serviceUuids.length, " services");
+  console.log("noticed ", peripheral.advertisement.localName, " with ", peripheral.advertisement.serviceUuids.length, " services");
   assert(peripheral.advertisement.serviceUuids.length > 0, "gotta have services!");
   if(mapNoticedPeripherals[peripheral.uuid]) {
     const oldPeriph = mapNoticedPeripherals[peripheral.uuid];
@@ -859,6 +862,11 @@ noble.on('discover', function (peripheral) {
     mapNoticedPeripherals[peripheral.uuid] = new NoticedPeripheral(peripheral, new Date().getTime());
   }
 
+  assert(peripheral._noble, "peripheral needs noble!");
   handleDiscoveredPeripheral(peripheral);
 });
 
+
+
+// now that we've set up 'discover' fully, let's pump through all the stored cranks
+loadSavedPeripherals();
