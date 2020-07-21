@@ -415,15 +415,8 @@ function loadSavedPeripherals() {
       for(var key in newNoticedPeriph) {
 
         const oldPeriph = newNoticedPeriph[key].peripheral;
-        const realPeriph = new Peripheral(noble, 
-                                          oldPeriph.id, 
-                                          oldPeriph.address, 
-                                          oldPeriph.addressType, 
-                                          oldPeriph.connectable, 
-                                          newNoticedPeriph[key].advertisement, 
-                                          oldPeriph.rssi);
 
-        noble.onDiscover(oldPeriph.id, 
+        noble.onReviveStoredPeripheral(oldPeriph.id, 
                          oldPeriph.address, 
                          oldPeriph.addressType, 
                          oldPeriph.connectable, 
