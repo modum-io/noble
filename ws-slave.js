@@ -1,5 +1,7 @@
 /* jshint loopfunc: true */
 var WebSocket = require('ws');
+var fs = require('fs');
+var Peripheral = require('./lib/peripheral');
 
 var noble = require('./index');
 
@@ -157,6 +159,16 @@ myControlSocket.on('message', (msg) => {
     case 'disable-real-scanning':
       g_fEnableRealScanning = false;
       notifyScanRelevantEvent();
+      break;
+    case 'prepare-for-shutdown':
+      // let's store all the key information about these peripherals so that when we restart we can resume
+      const toSave = {};
+      for(var key in mapNoticedPeripherals) {
+        delete mapNoticedPeripherals[key].peripheral._noble;
+        toSave[key] = mapNoticedPeripherals[key].toSaveable();
+      }
+      fs.writeFileSync('./map-noticed-peripherals.json', JSON.stringify(toSave));
+      myControlSocket.send('prepared-for-shutdown');
       break;
   }
 })
@@ -333,9 +345,17 @@ class NoticedPeripheral {
 
     this.tmNow = tmNow;
   }
+
+  toSaveable() {
+    return {
+      peripheral: JSON.parse(this.peripheral.toString()),
+      advertisement: this.advertisement,
+    }
+  }
 };
 
 const mapNoticedPeripherals = {};
+
 
 function handleDiscoveredPeripheral(peripheral, initialAdvertisement) {
 
@@ -382,8 +402,44 @@ function handleDiscoveredPeripheral(peripheral, initialAdvertisement) {
     }
   }
 }
+
+var fHaveLoadedOldOnes = false;
+function loadSavedPeripherals() {
+  if(!fHaveLoadedOldOnes) {
+    fHaveLoadedOldOnes = true;
+    try {
+      // load the old cache of peripherals.  We might have just restarted and certainly shouldn't spend
+      // our time re-scanning for everything.
+      const newNoticedPeriph = JSON.parse(fs.readFileSync('./map-noticed-peripherals.json', 'utf8'));
+      for(var key in newNoticedPeriph) {
+
+        const oldPeriph = newNoticedPeriph[key].peripheral;
+        const realPeriph = new Peripheral(noble, 
+                                          oldPeriph.id, 
+                                          oldPeriph.address, 
+                                          oldPeriph.addressType, 
+                                          oldPeriph.connectable, 
+                                          newNoticedPeriph[key].advertisement, 
+                                          oldPeriph.rssi);
+
+        noble.onDiscover(oldPeriph.id, 
+                         oldPeriph.address, 
+                         oldPeriph.addressType, 
+                         oldPeriph.connectable, 
+                         newNoticedPeriph[key].advertisement, 
+                         oldPeriph.rssi);
+        //mapNoticedPeripherals[key] = new NoticedPeripheral(realPeriph, new Date().getTime());
+        //mapNoticedPeripherals[key].peripheral._noble = noble;
+      }
+    } catch(e) {
+
+    }
+  }
+  
+}
 function dumpNoticedPeripherals(andContinueSequence) {
 
+  loadSavedPeripherals();
   try {
     if(isAnyContextScanning()) {
       for(var key in mapNoticedPeripherals) {
@@ -790,10 +846,14 @@ function wipeOldListeners(peripheral, andThisToo) {
 
 noble.on('discover', function (peripheral) {
 
-  //console.log("noticed ", peripheral.uuid, " with ", peripheral.advertisement.serviceUuids.length, " services");
+  console.log("noticed ", peripheral.uuid, " with ", peripheral.advertisement.serviceUuids.length, " services");
   assert(peripheral.advertisement.serviceUuids.length > 0, "gotta have services!");
   if(mapNoticedPeripherals[peripheral.uuid]) {
     const oldPeriph = mapNoticedPeripherals[peripheral.uuid];
+
+    assert(peripheral.address === oldPeriph.peripheral.address);
+    assert(peripheral.uuid === oldPeriph.peripheral.uuid);
+
     oldPeriph.tmNow = new Date().getTime();
   } else {
     mapNoticedPeripherals[peripheral.uuid] = new NoticedPeripheral(peripheral, new Date().getTime());
