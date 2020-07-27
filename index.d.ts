@@ -30,12 +30,14 @@ export declare function on(event: "stateChange", listener: (state: string) => vo
 export declare function on(event: "scanStart", listener: () => void): events.EventEmitter;
 export declare function on(event: "scanStop", listener: () => void): events.EventEmitter;
 export declare function on(event: "discover", listener: (peripheral: Peripheral) => void): events.EventEmitter;
+export declare function on(event: "warning", listener: (warning: string) => void): events.EventEmitter;
 export declare function on(event: string, listener: Function): events.EventEmitter;
 
 export declare function once(event: "stateChange", listener: (state: string) => void): events.EventEmitter;
 export declare function once(event: "scanStart", listener: () => void): events.EventEmitter;
 export declare function once(event: "scanStop", listener: () => void): events.EventEmitter;
 export declare function once(event: "discover", listener: (peripheral: Peripheral) => void): events.EventEmitter;
+export declare function once(event: "warning", listener: (warning: string) => void): events.EventEmitter;
 export declare function once(event: string, listener: Function): events.EventEmitter;
 
 export declare function removeListener(event: "stateChange", listener: (state: string) => void): events.EventEmitter;
