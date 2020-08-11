@@ -39,7 +39,7 @@ noble.on('discover', function (peripheral) {
     this.discoverServices();
   });
 
-  peripheral.on('servicesDiscover', function (services) {
+  peripheral.on('servicesDiscover', function (err, services) {
     console.log('on -> peripheral services discovered ' + services);
 
     var serviceIndex = 0;
