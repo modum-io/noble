@@ -1,36 +1,6 @@
 {
-  "_args": [
-    [
-      "git+https://github.com/arthare/noble.git#master",
-      "/home/pi/fouri-website-2020/omp-nodejs-app"
-    ]
-  ],
-  "license": "MIT",
-  "name": "@abandonware/noble",
-  "description": "A Node.js BLE (Bluetooth Low Energy) central library.",
-  "version": "1.9.2-10",
-  "repository": {
-    "type": "git",
-    "raw": "git+https://github.com/arthare/noble.git#master",
-    "rawSpec": "git+https://github.com/arthare/noble.git#master",
-    "saveSpec": "git+https://github.com/arthare/noble.git#master",
-    "fetchSpec": "https://github.com/arthare/noble.git",
-    "gitCommittish": "master"
-  },
-  "_requiredBy": [
-    "/"
-  ],
-  "_resolved": "git+https://github.com/arthare/noble.git#efd7bc976a920a5755ee5ee7fcf12e0056c3e67e",
-  "_spec": "git+https://github.com/arthare/noble.git#master",
-  "_where": "/home/pi/fouri-website-2020/omp-nodejs-app",
-  "author": {
-    "name": "Sandeep Mistry"
-  },
   "browser": {
     "./lib/resolve-bindings.js": "./lib/resolve-bindings-web.js"
-  },
-  "bugs": {
-    "url": "https://github.com/abandonware/noble/issues"
   },
   "dependencies": {
     "@abandonware/bluetooth-hci-socket": "^0.5.3-5",
@@ -60,7 +30,7 @@
     "node": ">=6"
   },
   "gypfile": true,
-  "homepage": "https://github.com/abandonware/noble#readme",
+  "homepage": "https://github.com/modum-io/noble#readme",
   "keywords": [
     "bluetooth",
     "BLE",
@@ -76,6 +46,9 @@
     },
     {
       "name": "Luis Montes"
+    },
+    {
+      "name": "Marco Crespi"
     }
   ],
   "name": "@abandonware/noble",
@@ -90,7 +63,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/abandonware/noble.git"
+    "url": "git+https://github.com/modum-io/noble.git"
   },
   "scripts": {
     "install": "node-gyp rebuild",
