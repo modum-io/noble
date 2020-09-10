@@ -5,13 +5,11 @@
       "/home/pi/fouri-website-2020/omp-nodejs-app"
     ]
   ],
-  "_from": "git+https://github.com/arthare/noble.git#master",
-  "_id": "@abandonware/noble@git+https://github.com/arthare/noble.git#efd7bc976a920a5755ee5ee7fcf12e0056c3e67e",
-  "_inBundle": false,
-  "_integrity": "",
-  "_location": "/@abandonware/noble",
-  "_phantomChildren": {},
-  "_requested": {
+  "license": "MIT",
+  "name": "@abandonware/noble",
+  "description": "A Node.js BLE (Bluetooth Low Energy) central library.",
+  "version": "1.9.2-10",
+  "repository": {
     "type": "git",
     "raw": "git+https://github.com/arthare/noble.git#master",
     "rawSpec": "git+https://github.com/arthare/noble.git#master",
